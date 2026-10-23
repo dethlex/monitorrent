@@ -117,12 +117,17 @@ class RutrackerTracker(object):
     def can_parse_url(self, url):
         return self._regex.match(url) is not None
 
-    def parse_url(self, url):
+    def parse_url(self, url, headers=None, cookies=None):
         match = self._regex.match(url)
         if match is None:
             return None
 
-        r = requests.get(url, allow_redirects=False, **self.tracker_settings.get_requests_kwargs())
+        # without cf_clearance and its User-Agent Cloudflare answers with a
+        # challenge page that has no heading, which is read below as "topic not found"
+        r = requests.get(url, allow_redirects=False,
+                         headers=headers if headers is not None else self.headers,
+                         cookies=cookies if cookies is not None else self.cookies,
+                         **self.tracker_settings.get_requests_kwargs())
 
         soup = get_soup(r.text)
         if soup.h1 is None:
@@ -306,7 +311,13 @@ class RutrackerPlugin(WithCredentialsMixin, ExecuteWithHashChangeMixin, TrackerP
         return self.tracker.can_parse_url(url)
 
     def parse_url(self, url):
-        return self.tracker.parse_url(url)
+        # the tracker only gets its headers and cookies from login() or verify(),
+        # and a topic can be added by url before either has run in this process
+        with DBSession() as db:
+            cred = db.query(self.credentials_class).first()
+            headers = parse_headers_field(cred.headers) if cred else None
+            cookies = parse_cookies_field(cred.cookies) if cred else None
+        return self.tracker.parse_url(url, headers=headers or None, cookies=cookies or None)
 
     def _prepare_request(self, topic):
         # the cookie needs its own User-Agent; request headers still win

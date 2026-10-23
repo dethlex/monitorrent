@@ -196,3 +196,39 @@ class RutrackerTrackerTest(TestCase):
 
         self.assertNotEqual(e.exception.code, 1)
         self.assertIn('Cloudflare', e.exception.message)
+
+    @patch('monitorrent.plugins.trackers.rutracker.requests.get')
+    def test_parse_url_sends_cloudflare_headers_and_cookies(self, get):
+        # without the pair cloudflare serves a challenge page that has no heading
+        get.return_value = Mock(text=u'<html><body><h1>Topic title</h1></body></html>')
+        self.tracker.setup(helper.fake_uid, helper.fake_bb_data,
+                           headers={'User-Agent': 'test-agent'},
+                           cookies={'cf_clearance': 'test-clearance'})
+
+        parsed_url = self.tracker.parse_url(self.urls_to_check[0])
+
+        self.assertEqual(parsed_url['original_name'], u'Topic title')
+        kwargs = get.call_args[1]
+        self.assertEqual(kwargs['headers'], {'User-Agent': 'test-agent'})
+        self.assertEqual(kwargs['cookies'], {'cf_clearance': 'test-clearance'})
+
+    @patch('monitorrent.plugins.trackers.rutracker.requests.get')
+    def test_parse_url_explicit_headers_and_cookies_win(self, get):
+        get.return_value = Mock(text=u'<html><body><h1>Topic title</h1></body></html>')
+        self.tracker.setup(helper.fake_uid, helper.fake_bb_data,
+                           headers={'User-Agent': 'old-agent'},
+                           cookies={'cf_clearance': 'old-clearance'})
+
+        self.tracker.parse_url(self.urls_to_check[0],
+                               headers={'User-Agent': 'new-agent'},
+                               cookies={'cf_clearance': 'new-clearance'})
+
+        kwargs = get.call_args[1]
+        self.assertEqual(kwargs['headers'], {'User-Agent': 'new-agent'})
+        self.assertEqual(kwargs['cookies'], {'cf_clearance': 'new-clearance'})
+
+    @patch('monitorrent.plugins.trackers.rutracker.requests.get')
+    def test_parse_url_challenge_page_is_not_a_topic(self, get):
+        get.return_value = Mock(text=u'<html><body><p>Just a moment...</p></body></html>')
+
+        self.assertIsNone(self.tracker.parse_url(self.urls_to_check[0]))

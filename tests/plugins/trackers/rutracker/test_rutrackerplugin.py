@@ -1,5 +1,5 @@
 # coding=utf-8
-from mock import patch
+from mock import patch, Mock
 from monitorrent.plugins.trackers import LoginResult, TrackerSettings, CloudflareChallengeSolverSettings
 from monitorrent.plugins.trackers.rutracker import RutrackerPlugin, RutrackerLoginFailedException, RutrackerTopic
 from monitorrent.db import DBSession
@@ -176,3 +176,40 @@ class RutrackerPluginTest(DbTestCase):
 
         self.assertEqual(result, LoginResult.CredentialsNotSpecified)
         self.assertFalse(tracker_login.called)
+
+    @patch('monitorrent.plugins.trackers.rutracker.requests.get')
+    def test_parse_url_uses_stored_cloudflare_credentials(self, get):
+        # a topic can be added by url right after a restart, before login() or
+        # verify() has given the tracker its headers and cookies
+        get.return_value = Mock(text=u'<html><body><h1>Topic title</h1></body></html>')
+        self.plugin.tracker.setup(None, None)
+        with patch('monitorrent.plugins.trackers.rutracker.RutrackerPlugin.login', return_value=LoginResult.Ok):
+            self.plugin.update_credentials({
+                'username': self.helper.fake_login,
+                'password': self.helper.fake_password,
+                'cookies': '{"cf_clearance": "test-clearance"}',
+                'headers': 'test-agent',
+            })
+
+        parsed_url = self.plugin.parse_url(self.urls_to_check[0])
+
+        self.assertEqual(parsed_url['original_name'], u'Topic title')
+        kwargs = get.call_args[1]
+        self.assertEqual(kwargs['headers'], {'User-Agent': 'test-agent'})
+        self.assertEqual(kwargs['cookies'], {'cf_clearance': 'test-clearance'})
+        # reading the credentials must not leak them into the shared tracker
+        self.assertEqual(self.plugin.tracker.headers, {})
+        self.assertEqual(self.plugin.tracker.cookies, {})
+
+    @patch('monitorrent.plugins.trackers.rutracker.requests.get')
+    def test_parse_url_without_credentials_keeps_tracker_settings(self, get):
+        get.return_value = Mock(text=u'<html><body><h1>Topic title</h1></body></html>')
+        self.plugin.tracker.setup(None, None,
+                                  headers={'User-Agent': 'tracker-agent'},
+                                  cookies={'cf_clearance': 'tracker-clearance'})
+
+        self.plugin.parse_url(self.urls_to_check[0])
+
+        kwargs = get.call_args[1]
+        self.assertEqual(kwargs['headers'], {'User-Agent': 'tracker-agent'})
+        self.assertEqual(kwargs['cookies'], {'cf_clearance': 'tracker-clearance'})
